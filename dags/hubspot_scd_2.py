@@ -15,7 +15,7 @@ default_args={
 }
 
 ## DAG
-with DAG(dag_id='hubspot_etl_pipeline',
+with DAG(dag_id='hubspot_etl_pipeline_scd_2',
          default_args=default_args,
          schedule_interval='@daily',
          catchup=False) as dags:
@@ -71,33 +71,68 @@ with DAG(dag_id='hubspot_etl_pipeline',
 
         # Create table if it doesn't exist
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS contact_data (
-            hubspot_id numeric PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS contact_data_dim2 (
+            contact_key SERIAL PRIMARY KEY,
+            hubspot_id numeric,
             firstname varchar(255),
             lastname varchar(255),
             email varchar(255),
             created_at varchar(255),
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            start_date TIMESTAMP,
+            end_date TIMESTAMP
         );
         """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS contact_data_stg (
+            hubspot_id numeric PRIMARY KEY,
+            firstname varchar(255),
+            lastname varchar(255),
+            email varchar(255),
+            created_at varchar(255)
+        );
+        """)
+
+        cursor.execute("DELETE FROM contact_data_stg;")
+
         for contact in transformed_data: 
-            # Insert transformed data into the table
             cursor.execute("""
-            INSERT INTO contact_data (hubspot_id, firstname, lastname, email, created_at)
-            VALUES (%s, %s, %s, %s, %s) ON CONFLICT (hubspot_id) DO UPDATE
-            SET firstname = %s, lastname = %s, email = %s, created_at = %s
+            INSERT INTO contact_data_stg (hubspot_id, firstname, lastname, email, created_at)
+            VALUES (%s, %s, %s, %s, %s);
             """, (
                 contact['hubspot_id'],
                 contact['firstname'],
                 contact['lastname'],
                 contact['email'],
-                contact['created_at'], 
-                ### update values
-                contact['firstname'],
-                contact['lastname'],
-                contact['email'],
                 contact['created_at']
             ))
+
+        
+        # Insert transformed data into the table
+        cursor.execute("""
+        UPDATE contact_data_dim2
+        SET end_date = CURRENT_TIMESTAMP
+        FROM contact_data_stg
+        WHERE contact_data_stg.hubspot_id = contact_data_dim2.hubspot_id
+        AND (
+            contact_data_stg.firstname <> contact_data_dim2.firstname OR 
+            contact_data_stg.lastname <> contact_data_dim2.lastname OR 
+            contact_data_stg.email <> contact_data_dim2.email 
+            )
+        AND contact_data_dim2.end_date IS NULL;
+        """)
+
+        cursor.execute("""
+        INSERT INTO contact_data_dim2 (hubspot_id, firstname, lastname, email, created_at, start_date, end_date)
+        SELECT hubspot_id, firstname, lastname, email, created_at, CURRENT_TIMESTAMP AS start_date, NULL AS end_date
+        FROM contact_data_stg
+        WHERE (hubspot_id, firstname, lastname, email, created_at) NOT IN (
+             SELECT hubspot_id, firstname, lastname, email, created_at
+             FROM contact_data_dim2
+             );
+        """)
+
+
         conn.commit()
     
 
