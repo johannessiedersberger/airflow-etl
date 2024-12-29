@@ -21,7 +21,7 @@ with DAG(dag_id='hubspot_etl_pipeline_scd_3',
          catchup=False) as dags:
     
     @task()
-    def extract_contact_data():
+    def extract_product_data():
         """Extract contact data from hubspot API using Airflow Connection."""
 
         # Use HTTP Hook to get connection details from Airflow connection
@@ -30,7 +30,7 @@ with DAG(dag_id='hubspot_etl_pipeline_scd_3',
 
         ## Build the API endpoint
         ## https://api.hubapi.com/crm/v3/objects/contacts?limit=10&archived=false
-        endpoint=f'/crm/v3/objects/contacts?limit=10&archived=false'
+        endpoint=f'/crm/v3/objects/products?properties=description,name,price'
 
         ## Make the request via the HTTP Hook
         response=http_hook.run(endpoint, headers = {
@@ -45,25 +45,24 @@ with DAG(dag_id='hubspot_etl_pipeline_scd_3',
             raise Exception(f"Failed to fetch contact data: {response.status_code}")
         
     @task()
-    def transform_contact_data(contact_data):
-        """Transform the extracted contact data."""
-        all_contacts = contact_data['results']
-        transformed_contacts = []
+    def transform_product_data(product_data):
+        """Transform the extracted product data."""
+        all_products = product_data['results']
+        transformed_products = []
 
-        for contact in all_contacts:
+        for product in all_products:
             transformed_data = {
-                'hubspot_id': contact['id'],
-                'firstname': contact['properties']['firstname'],
-                'lastname': contact['properties']['lastname'], 
-                'email': contact['properties']['email'], 
-                'created_at': contact['createdAt']
+                'product_id': product['id'],
+                'name': product['properties']['name'],
+                'description': product['properties']['description'], 
+                'price': product['properties']['price']
             }
-            transformed_contacts.append(transformed_data);
+            transformed_products.append(transformed_data);
 
-        return transformed_contacts
+        return transformed_products
     
     @task()
-    def load_contact_data(transformed_data):
+    def load_product_data(transformed_data):
         """Load transformed data into PostgreSQL."""
         pg_hook = PostgresHook(postgres_conn_id=POSTGRES_CONN_ID)
         conn = pg_hook.get_conn()
@@ -71,56 +70,53 @@ with DAG(dag_id='hubspot_etl_pipeline_scd_3',
 
         # Create table if it doesn't exist
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS contact_data_dim3 (
-            hubspot_id numeric PRIMARY KEY,
-            previous_firstname varchar(255),
-            firstname varchar(255),
-            previous_lastname varchar(255),
-            lastname varchar(255),
-            previous_email varchar(255),
-            email varchar(255),
-            created_at varchar(255)
+        CREATE TABLE IF NOT EXISTS dim3_products (
+            product_id numeric PRIMARY KEY,
+            previous_name varchar(255),
+            name varchar(255),
+            previous_description varchar(255),
+            description varchar(255),
+            previous_price float(24),
+            price float(24)
         );
         """)
 
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS contact_data_stg3 (
-            hubspot_id numeric PRIMARY KEY,
-            firstname varchar(255),
-            lastname varchar(255),
-            email varchar(255),
-            created_at varchar(255)
+        CREATE TABLE IF NOT EXISTS stg_products (
+            product_id numeric PRIMARY KEY,
+            name varchar(255),
+            description varchar(255),
+            price float(24)
         );
         """)
 
-        cursor.execute("DELETE FROM contact_data_stg3;")
+        cursor.execute("DELETE FROM stg_products;")
 
-        for contact in transformed_data: 
+        for product in transformed_data: 
             cursor.execute("""
-            INSERT INTO contact_data_stg3 (hubspot_id, firstname, lastname, email, created_at)
-            VALUES (%s, %s, %s, %s, %s);
+            INSERT INTO stg_products (product_id, name, description, price)
+            VALUES (%s, %s, %s, %s);
             """, (
-                contact['hubspot_id'],
-                contact['firstname'],
-                contact['lastname'],
-                contact['email'],
-                contact['created_at']
+                product['product_id'],
+                product['name'],
+                product['description'],
+                product['price']
             ))
 
         
         # Insert transformed data into the table
         cursor.execute("""
-        INSERT INTO contact_data_dim3 (hubspot_id, previous_firstname, firstname, previous_lastname, lastname, previous_email, email, created_at)
-        SELECT hubspot_id, NULL AS previous_firstname, firstname, NULL AS previous_lastname, lastname, NULL AS previous_email, email, created_at
-        FROM contact_data_stg3
-        ON CONFLICT (hubspot_id) 
+        INSERT INTO dim3_products (product_id, previous_name, name, previous_description, description, previous_price, price)
+        SELECT product_id, NULL AS previous_name, name, NULL AS previous_description, description, NULL AS previous_price, price
+        FROM stg_products
+        ON CONFLICT (product_id) 
         DO UPDATE SET
-            previous_firstname = contact_data_dim3.firstname, 
-            firstname = EXCLUDED.firstname, 
-            previous_lastname = contact_data_dim3.lastname, 
-            lastname = EXCLUDED.lastname, 
-            previous_email = contact_data_dim3.email, 
-            email = EXCLUDED.email;
+            previous_name = dim3_products.name, 
+            name = EXCLUDED.name, 
+            previous_description = dim3_products.description, 
+            description = EXCLUDED.description, 
+            previous_price = dim3_products.price, 
+            price = EXCLUDED.price;
         """)
 
         conn.commit()
@@ -129,6 +125,6 @@ with DAG(dag_id='hubspot_etl_pipeline_scd_3',
         cursor.close()
 
     ## DAG Worflow- ETL Pipeline
-    contact_data= extract_contact_data()
-    transformed_data=transform_contact_data(contact_data)
-    load_contact_data(transformed_data)
+    product_data= extract_product_data()
+    transformed_data=transform_product_data(product_data)
+    load_product_data(transformed_data)

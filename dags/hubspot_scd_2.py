@@ -45,24 +45,24 @@ with DAG(dag_id='hubspot_etl_pipeline_scd_2',
             raise Exception(f"Failed to fetch contact data: {response.status_code}")
         
     @task()
-    def transform_product_data(contact_data):
+    def transform_product_data(product_data):
         """Transform the extracted product data."""
-        all_contacts = contact_data['results']
+        all_products = product_data['results']
         transformed_products = []
 
-        for contact in all_contacts:
+        for product in all_products:
             transformed_data = {
-                'product_id': contact['id'],
-                'name': contact['properties']['name'],
-                'description': contact['properties']['description'], 
-                'price': contact['properties']['price']
+                'product_id': product['id'],
+                'name': product['properties']['name'],
+                'description': product['properties']['description'], 
+                'price': product['properties']['price']
             }
             transformed_products.append(transformed_data);
 
         return transformed_products
     
     @task()
-    def load_contact_data(transformed_data):
+    def load_product_data(transformed_data):
         """Load transformed data into PostgreSQL."""
         pg_hook = PostgresHook(postgres_conn_id=POSTGRES_CONN_ID)
         conn = pg_hook.get_conn()
@@ -135,6 +135,6 @@ with DAG(dag_id='hubspot_etl_pipeline_scd_2',
         cursor.close()
 
     ## DAG Worflow- ETL Pipeline
-    product_data= extract_product_data()
+    product_data=extract_product_data()
     transformed_data=transform_product_data(product_data)
-    load_contact_data(transformed_data)
+    load_product_data(transformed_data)
