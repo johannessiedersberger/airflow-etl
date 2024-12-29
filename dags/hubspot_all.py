@@ -33,7 +33,7 @@ with DAG(dag_id='hubspot_etl_pipeline_scd_1_all',
         endpointContacs="/crm/v3/objects/contacts"
         endpointCompanies="/crm/v3/objects/companies"
         endpointDeals="/crm/v3/objects/deals?associations=contacts,companies"
-        endpointProduct="/crm/v3/objects/products"
+        endpointProduct="/crm/v3/objects/products?properties=description,name,price"
         endpointLiteItem="/crm/v3/objects/line_item?associations=deals,products"
 
         ## Make the request via the HTTP Hook
@@ -116,7 +116,8 @@ with DAG(dag_id='hubspot_etl_pipeline_scd_1_all',
             transformed_data = {
                 'product_id': product['id'],
                 'name': product['properties']['name'],
-                'price': product['properties']['price']
+                'price': product['properties']['price'], 
+                'description': product['properties']['description']
             }
             transformed_products.append(transformed_data);
     
@@ -178,17 +179,15 @@ with DAG(dag_id='hubspot_etl_pipeline_scd_1_all',
         """)
 
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS dim_line_items (
-            lite_item_id numeric PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS fact_line_items (
+            line_item_id numeric PRIMARY KEY,
             deal_id numeric REFERENCES dim_deals (deal_id), 
             product_id numeric REFERENCES dim_products (product_id), 
             quantity integer
         );
         """)
 
-        print(transformed_data)
-        list_contacts = transformed_data[0]
-        for contact in list_contacts: 
+        for contact in transformed_data[0]: 
             print(contact)
             # Insert transformed data into the table
             cursor.execute("""
@@ -204,6 +203,72 @@ with DAG(dag_id='hubspot_etl_pipeline_scd_1_all',
                 contact['firstname'],
                 contact['lastname'],
                 contact['email'],
+            ))
+        conn.commit()
+
+        for company in transformed_data[1]: 
+            # Insert transformed data into the table
+            cursor.execute("""
+            INSERT INTO dim_companies (company_id, name)
+            VALUES (%s, %s) ON CONFLICT (company_id) DO UPDATE
+            SET name = %s
+            """, (
+                company['company_id'],
+                company['name'],
+                ### update values
+                company['name']
+            ))
+        conn.commit()
+
+        for deal in transformed_data[2]: 
+            # Insert transformed data into the table
+            cursor.execute("""
+            INSERT INTO dim_deals (deal_id, contact_id, company_id)
+            VALUES (%s, %s, %s) ON CONFLICT (deal_id) DO UPDATE
+            SET company_id = %s, contact_id = %s
+            """, (
+                deal['deal_id'],
+                deal['contact_id'],
+                deal['company_id'],
+                ### update values
+                deal['company_id'],
+                deal['contact_id'],
+            ))
+        conn.commit()
+
+        for product in transformed_data[3]: 
+            # Insert transformed data into the table
+            cursor.execute("""
+            INSERT INTO dim_products (product_id, name, description, price)
+            VALUES (%s, %s, %s, %s) ON CONFLICT (product_id) DO UPDATE
+            SET name = %s, description = %s, price = %s
+            """, (
+                product['product_id'],
+                product['name'],
+                product['description'],
+                product['price'],
+                ### update values
+                product['name'],
+                product['description'],
+                product['price']
+            ))
+        conn.commit()
+
+        for line_item in transformed_data[4]: 
+            # Insert transformed data into the table
+            cursor.execute("""
+            INSERT INTO fact_line_items (line_item_id, deal_id, product_id, quantity)
+            VALUES (%s, %s, %s, %s) ON CONFLICT (line_item_id) DO UPDATE
+            SET deal_id = %s, product_id = %s, quantity = %s
+            """, (
+                line_item['line_item_id'],
+                line_item['deal_id'],
+                line_item['product_id'],
+                line_item['quantity'],
+                ### update values
+                line_item['deal_id'],
+                line_item['product_id'],
+                line_item['quantity']
             ))
         conn.commit()
     
